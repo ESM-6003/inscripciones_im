@@ -24,7 +24,8 @@ const CSV_FIELDS = [
   'saeta', 'obra_social', 'seguro_escolar', 'pago_voluntario',
   'monto', 'permiso', 'observaciones',
   'anio', 'turno', 'materia', 'profesor', 'comision', 'horario',
-  'en_lista_espera'
+  'en_lista_espera', 'pais', 'provincia', 'indigena', 'discapacidad',
+  'discapacidad_cual'
 ];
 
 const CERTIFICATE_SETTINGS = {
@@ -157,7 +158,11 @@ function doGet(e) {
   const params = e && e.parameter ? e.parameter : {};
   const action = String(params.action || '').trim().toLowerCase();
 
-  if (action === 'emit_certificate') {
+  if (action === 'version') {
+    return jsonOrJsonp_({ ok: true, version: '2026-09-28-im-certificate-table-v1' }, params.callback);
+  }
+
+  if (action === 'send_certificate' || action === 'download_certificate') {
     if (APP_SECRET && params.appSecret !== APP_SECRET) {
       return jsonOrJsonp_({ ok: false, error: 'No autorizado' }, params.callback);
     }
@@ -172,13 +177,19 @@ function doGet(e) {
       return jsonOrJsonp_({ ok: false, error: cert.error || 'No se pudo generar el certificado' }, params.callback);
     }
 
-    const emailResult = sendCertificateEmail_(record, cert.blob);
+    if (action === 'download_certificate') {
+      return jsonOrJsonp_({
+        ok: true,
+        fileName: cert.fileName,
+        pdfBase64: Utilities.base64EncodeWebSafe(cert.blob.getBytes()),
+      }, params.callback);
+    }
 
+    const emailResult = sendCertificateEmail_(record, cert.blob);
     return jsonOrJsonp_(
       {
         ok: true,
         fileName: cert.fileName,
-        pdfBase64: Utilities.base64EncodeWebSafe(cert.blob.getBytes()),
         emailSent: emailResult.ok,
         emailMessage: emailResult.message,
       },
@@ -202,6 +213,8 @@ function doGet(e) {
 
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+
+    ensureSheetHeaders_(sheet);
     const existingValues = getExistingValues_(sheet);
     const occupiedBySection = getOccupiedBySection_(existingValues);
     const ocupados = occupiedBySection.get(key) || 0;
@@ -256,6 +269,29 @@ function normalizeRecords(body) {
   if (Array.isArray(body.records)) return body.records.filter((x) => x && typeof x === 'object');
   if (body.record && typeof body.record === 'object') return [body.record];
   return [];
+}
+
+function ensureSheetHeaders_(sheet) {
+  const requiredColumns = CSV_FIELDS.length;
+  const currentColumns = sheet.getMaxColumns();
+  if (currentColumns < requiredColumns) {
+    sheet.insertColumnsAfter(currentColumns, requiredColumns - currentColumns);
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) {
+    sheet.getRange(1, 1, 1, CSV_FIELDS.length).setValues([CSV_FIELDS]);
+    return;
+  }
+
+  const existingHeaders = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0];
+  if (String(existingHeaders[0] || '').trim().toLowerCase() !== 'id') return;
+
+  const headers = existingHeaders.map(value => String(value || '').trim());
+  const missingFields = CSV_FIELDS.filter(field => !headers.includes(field));
+  if (missingFields.length) {
+    sheet.getRange(1, headers.length + 1, 1, missingFields.length).setValues([missingFields]);
+  }
 }
 
 function parseBody(raw) {
@@ -415,6 +451,8 @@ function buildCertificatePdfBlob_(record) {
     appendFieldLine_(body, 'Fecha de Nacimiento', record.fecha_nacimiento || '');
     appendFieldLine_(body, 'Edad', record.edad || '');
     appendFieldLine_(body, 'Legajo', legajo || '');
+    appendFieldLine_(body, 'País', record.pais || '');
+    appendFieldLine_(body, 'Provincia', record.provincia || '');
     appendFieldLine_(body, 'Domicilio', record.direccion || record.domicilio || '');
     appendFieldLine_(body, 'Telefono', record.telefono || '');
     appendFieldLine_(body, 'Mail', record.email || record.mail || '');
@@ -427,19 +465,15 @@ function buildCertificatePdfBlob_(record) {
     body.appendParagraph('');
 
     appendSectionTitle_(body, 'Datos de Inscripcion:');
-    appendFieldLine_(body, 'Anio', record.anio || record.año || '', { suffix: '°' });
-    appendFieldLine_(body, 'Turno', record.turno || 'N/A');
-    appendFieldLine_(body, 'Materia', record.materia || 'N/A');
-    appendFieldLine_(body, 'Profesor/a', record.profesor || 'N/A');
-    appendFieldLine_(body, 'Comision', record.comision || 'N/A');
-    appendFieldLine_(body, 'Horario', record.horario || '');
-
-    if (isWaitlistValue_(record.en_lista_espera)) {
-      appendWarningLine_(body, 'EN LISTA DE ESPERA');
-    }
+    appendMateriasTable_(body, record);
     body.appendParagraph('');
 
     appendSectionTitle_(body, 'Informacion Adicional:');
+    appendFieldLine_(body, 'Indígena', record.indigena || '');
+    appendFieldLine_(body, 'Discapacidad', record.discapacidad || '');
+    if (String(record.discapacidad || '').toLowerCase() === 'si' && String(record.discapacidad_cual || '').trim()) {
+      appendFieldLine_(body, '¿Cuál?', record.discapacidad_cual);
+    }
     appendFieldLine_(body, 'SAETA', record.saeta || '');
     appendFieldLine_(body, 'Obra Social', record.obra_social || '');
     appendFieldLine_(body, 'Seguro Escolar', record.seguro_escolar || '');
@@ -486,6 +520,51 @@ function buildCertificatePdfBlob_(record) {
       }
     } catch (_err) {
       // no-op
+    }
+  }
+}
+
+function appendMateriasTable_(body, record) {
+  const materias = Array.isArray(record.materias) && record.materias.length
+    ? record.materias
+    : [record];
+  const rows = [['Materia', 'Profesor/a', 'Comisión', 'Turno', 'Horario']];
+
+  materias.forEach(materia => {
+    rows.push([
+      String(materia.materia || 'N/A'),
+      String(materia.profesor || 'N/A'),
+      String(materia.comision || 'N/A'),
+      String(materia.turno || 'N/A'),
+      String(materia.horario || 'N/A'),
+    ]);
+  });
+
+  const table = body.appendTable(rows);
+  table.setBorderWidth(0.75);
+  const header = table.getRow(0);
+  for (let col = 0; col < header.getNumCells(); col += 1) {
+    const cell = header.getCell(col);
+    cell.setBackgroundColor('#e8eef5');
+    cell.editAsText().setAttributes(
+      Object.assign({}, baseTextAttrs_(), {
+        [DocumentApp.Attribute.BOLD]: true,
+        [DocumentApp.Attribute.FONT_SIZE]: 9,
+      })
+    );
+  }
+
+  for (let row = 1; row < table.getNumRows(); row += 1) {
+    const cells = table.getRow(row);
+    for (let col = 0; col < cells.getNumCells(); col += 1) {
+      cells.getCell(col).editAsText().setAttributes(
+        Object.assign({}, baseTextAttrs_(), {
+          [DocumentApp.Attribute.FONT_SIZE]: 9,
+        })
+      );
+    }
+    if (isWaitlistValue_(materias[row - 1].en_lista_espera)) {
+      appendWarningLine_(body, `${materias[row - 1].materia || 'Materia'}: EN LISTA DE ESPERA`);
     }
   }
 }
@@ -651,7 +730,10 @@ function appendFieldLine_(body, label, value, opts) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return;
   const suffix = String(options.suffix || '');
-  appendPlainLine_(body, `${label}: ${raw}${suffix}`);
+  const text = `${label}: ${raw}${suffix}`;
+  const paragraph = body.appendParagraph(text);
+  paragraph.setAttributes(baseTextAttrs_());
+  paragraph.editAsText().setBold(0, String(label).length - 1, true);
 }
 
 function appendPlainLine_(body, text) {

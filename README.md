@@ -77,7 +77,19 @@ Cuando un administrador guarda cambios en el catálogo:
 Al guardar inscripciones desde el formulario:
 - se guarda localmente en el navegador
 - y se hace append en Google Sheets directo por Web App
-- y se genera, descarga y envía automáticamente el certificado PDF para cada materia guardada
+- y se genera un certificado PDF por estudiante con todas las materias en una única tabla
+- se descarga el PDF y se envía por email como acciones independientes
+
+El formulario valida el email, requiere un monto de al menos $1.000 y guarda país, provincia,
+pertenencia indígena y discapacidad. Para países distintos de Argentina, la provincia/estado
+se completa manualmente. El Apps Script agrega estos cinco campos al final de `Inscripciones IM`
+sin reordenar las columnas existentes; la primera fila de encabezados se amplía cuando está presente.
+
+Después de actualizar `google_apps_script/Code.gs`, hay que crear un nuevo despliegue de la Web App
+para habilitar la tabla única y las acciones separadas `send_certificate` y `download_certificate`.
+La URL actualmente configurada en `web_config.js` corresponde al despliegue IM terminado en
+`.../AKfycbx_Hy2HbnCWU8zBFdAgGqjs43PlWUjpZeKaG840qtPFBGK985Zt104QkAW0zizyjKjN/exec`;
+la versión esperada responde a `action=version` con `2026-09-28-im-certificate-table-v1`.
 
 Importante: esta integración es append-only. No borra ni reemplaza filas en la planilla.
 

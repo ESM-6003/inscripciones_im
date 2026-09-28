@@ -5,6 +5,14 @@ const RUNTIME_APP_SECRET = String(window.WEB_RUNTIME_CONFIG?.appSecret || "").tr
 const SHEETS_APPEND_URL = RUNTIME_SHEETS_APPEND_URL || String(window.WEB_CONFIG?.sheetsAppendUrl || "").trim();
 const APP_SECRET = RUNTIME_APP_SECRET || String(window.WEB_CONFIG?.appSecret || "").trim();
 const CERTIFICATE_API_BASE = getCertificateApiBase();
+const COUNTRY_CODES = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW";
+const PROVINCES_AR = [
+  "Buenos Aires", "Catamarca", "Chaco", "Chubut", "Ciudad Autónoma de Buenos Aires",
+  "Córdoba", "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja",
+  "Mendoza", "Misiones", "Neuquén", "Río Negro", "Salta", "San Juan", "San Luis",
+  "Santa Cruz", "Santa Fe", "Santiago del Estero", "Tierra del Fuego, Antártida e Islas del Atlántico Sur",
+  "Tucumán",
+];
 
 const dom = {
   tabs: document.querySelectorAll(".tab"),
@@ -40,6 +48,7 @@ init();
 
 async function init() {
   setupTabs();
+  setupStudentFields();
   setupEvents();
   initConfigCatalogEditor();
 
@@ -72,6 +81,10 @@ function setupTabs() {
 function setupEvents() {
   dom.form?.addEventListener("submit", onGuardarInscripcion);
   dom.form?.addEventListener("reset", onResetFormulario);
+  dom.form?.elements.namedItem("pais")?.addEventListener("change", updateCountryProvinceField);
+  dom.form?.elements.namedItem("discapacidad")?.addEventListener("change", updateDisabilityField);
+  dom.form?.elements.namedItem("email")?.addEventListener("input", validateEmailField);
+  dom.form?.elements.namedItem("monto")?.addEventListener("input", validateAmountField);
   dom.addMateriaBtn?.addEventListener("click", onAgregarMateria);
   dom.materiasContainer?.addEventListener("click", onMateriaContainerClick);
   dom.materiasContainer?.addEventListener("change", onMateriaContainerChange);
@@ -93,6 +106,78 @@ function setupEvents() {
   window.addEventListener("online", () => {
     void syncCatalogFromSheets({ background: true });
   });
+}
+
+function setupStudentFields() {
+  const countrySelect = dom.form?.elements.namedItem("pais");
+  const provinceSelect = dom.form?.elements.namedItem("provincia");
+  if (countrySelect instanceof HTMLSelectElement) {
+    const displayNames = typeof Intl.DisplayNames === "function"
+      ? new Intl.DisplayNames(["es"], { type: "region" })
+      : null;
+    const countries = [...COUNTRY_CODES.split(" "), "EG", "GG", "IT", "RU", "TH"]
+      .map((code) => ({ name: displayNames?.of(code) || code }))
+      .sort((a, b) => a.name.localeCompare(b.name, "es"));
+    countries.forEach(({ name }) => countrySelect.add(new Option(name, name)));
+  }
+  if (provinceSelect instanceof HTMLSelectElement) {
+    PROVINCES_AR.forEach((province) => provinceSelect.add(new Option(province, province)));
+  }
+  updateCountryProvinceField();
+  updateDisabilityField();
+}
+
+function updateCountryProvinceField() {
+  const countrySelect = dom.form?.elements.namedItem("pais");
+  const provinceSelect = dom.form?.elements.namedItem("provincia");
+  const otherProvinceInput = dom.form?.elements.namedItem("provincia_otro");
+  const otherProvinceLabel = document.getElementById("provinciaOtroLabel");
+  if (
+    !(countrySelect instanceof HTMLSelectElement) ||
+    !(provinceSelect instanceof HTMLSelectElement) ||
+    !(otherProvinceInput instanceof HTMLInputElement) ||
+    !(otherProvinceLabel instanceof HTMLLabelElement)
+  ) return;
+
+  const isArgentina = countrySelect.value === "Argentina";
+  provinceSelect.disabled = !isArgentina;
+  provinceSelect.required = isArgentina && Boolean(countrySelect.value);
+  otherProvinceLabel.hidden = isArgentina || !countrySelect.value;
+  otherProvinceInput.disabled = isArgentina || !countrySelect.value;
+  otherProvinceInput.required = !isArgentina && Boolean(countrySelect.value);
+  if (isArgentina || !countrySelect.value) {
+    otherProvinceInput.value = "";
+  } else {
+    provinceSelect.value = "";
+  }
+}
+
+function updateDisabilityField() {
+  const disability = dom.form?.elements.namedItem("discapacidad");
+  const detail = dom.form?.elements.namedItem("discapacidad_cual");
+  if (!(disability instanceof HTMLSelectElement) || !(detail instanceof HTMLInputElement)) return;
+  const required = disability.value === "Si";
+  detail.disabled = !required;
+  detail.required = required;
+  if (!required) detail.value = "";
+}
+
+function validateEmailField(event) {
+  const input = event.currentTarget;
+  if (!(input instanceof HTMLInputElement)) return;
+  const value = input.value.trim();
+  input.setCustomValidity(value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+    ? "Ingresá un email con @ y un dominio válido, por ejemplo nombre@correo.com.ar."
+    : "");
+}
+
+function validateAmountField(event) {
+  const input = event.currentTarget;
+  if (!(input instanceof HTMLInputElement)) return;
+  const value = input.value.trim();
+  input.setCustomValidity(value && (!Number.isFinite(Number(value)) || Number(value) < 1000)
+    ? "El monto debe ser exacto y no puede ser menor a $1.000."
+    : "");
 }
 
 async function syncCatalogFromSheets({ background = true } = {}) {
@@ -156,6 +241,9 @@ function onGuardarInscripcion(event) {
     return;
   }
 
+  raw.provincia = raw.pais === "Argentina" ? raw.provincia : raw.provincia_otro;
+  delete raw.provincia_otro;
+
   if (materiasResult.hasIncomplete) {
     setStatus("Cada bloque de materia cargado debe tener Materia y Profesor/a.", true);
     return;
@@ -189,88 +277,95 @@ function onGuardarInscripcion(event) {
 
 async function procesarCertificadosAutomaticos(records) {
   if (!Array.isArray(records) || !records.length) return;
+  const record = buildCertificateRecord(records);
+  const nombre = `${record.nombre || ""} ${record.apellido || ""}`.trim() || "registro";
+  let downloadMessage = "";
+  let emailMessage = "";
 
-  if (SHEETS_APPEND_URL) {
-    await procesarCertificadosAutomaticosViaAppsScript(records);
-    return;
+  try {
+    const downloaded = SHEETS_APPEND_URL
+      ? await downloadRemoteCertificate(record)
+      : await downloadLocalCertificate(record);
+    triggerBlobDownload(downloaded.blob, downloaded.filename);
+    downloadMessage = `Certificado descargado para ${nombre}.`;
+  } catch (error) {
+    downloadMessage = `No se pudo descargar el certificado de ${nombre}: ${error.message || error}`;
   }
 
-  for (let index = 0; index < records.length; index += 1) {
-    const registro = records[index];
-    const nombre = `${registro.nombre || ""} ${registro.apellido || ""}`.trim() || "registro";
-    setStatus(`Procesando certificado ${index + 1}/${records.length} para ${nombre}...`);
-
-    try {
-      const response = await fetch(buildCertificateEndpoint("/api/certificados/emit"), {
-        method: "POST",
-        mode: CERTIFICATE_API_BASE ? "cors" : "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ record: registro, appSecret: APP_SECRET }),
-      });
-
-      const contentType = String(response.headers.get("Content-Type") || "").toLowerCase();
-      if (!response.ok || contentType.includes("application/json")) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "No se pudo generar el certificado.");
-      }
-
-      const blob = await response.blob();
-      const filename = filenameFromDisposition(
-        response.headers.get("Content-Disposition") || "",
-        buildCertificateFilename(registro)
-      );
-
-      triggerBlobDownload(blob, filename);
-
-      const emailOk = String(response.headers.get("X-Certificate-Email-OK") || "").toLowerCase() === "true";
-      const emailMsg = String(response.headers.get("X-Certificate-Email-Message") || "").trim();
-
-      if (emailOk) {
-        setStatus(`Certificado descargado y enviado para ${nombre}.`);
-      } else if (emailMsg) {
-        setStatus(`Certificado descargado para ${nombre}. Email: ${emailMsg}`, true);
-      } else {
-        setStatus(`Certificado descargado para ${nombre}.`);
-      }
-    } catch (error) {
-      setStatus(`No se pudo procesar el certificado de ${nombre}: ${error.message || error}`, true);
+  try {
+    if (SHEETS_APPEND_URL) {
+      const result = await fetchRemoteCertificateAction("send_certificate", record);
+      if (!result.ok) throw new Error(result.error || "No se pudo enviar el certificado.");
+      emailMessage = result.emailSent
+        ? `Certificado enviado a ${record.email}.`
+        : `Certificado no enviado: ${result.emailMessage || "error de email"}`;
+    } else {
+      await sendLocalCertificate(record);
+      emailMessage = `Certificado enviado a ${record.email}.`;
     }
+  } catch (error) {
+    emailMessage = `No se pudo enviar el certificado: ${error.message || error}`;
   }
+
+  const message = [downloadMessage, emailMessage].filter(Boolean).join(" ");
+  setStatus(message, downloadMessage.startsWith("No se pudo") || emailMessage.startsWith("No se pudo") || emailMessage.startsWith("Certificado no"));
 }
 
-async function procesarCertificadosAutomaticosViaAppsScript(records) {
-  for (let index = 0; index < records.length; index += 1) {
-    const registro = records[index];
-    const nombre = `${registro.nombre || ""} ${registro.apellido || ""}`.trim() || "registro";
-    setStatus(`Procesando certificado ${index + 1}/${records.length} para ${nombre}...`);
+function buildCertificateRecord(records) {
+  const first = records[0] || {};
+  const materias = records.map((record) => ({
+    anio: record.anio || "",
+    materia: record.materia || "",
+    profesor: record.profesor || "",
+    comision: record.comision || "",
+    turno: record.turno || "",
+    horario: record.horario || "",
+    en_lista_espera: record.en_lista_espera || "No",
+  }));
+  return { ...first, materias };
+}
 
-    try {
-      const data = await fetchRemoteEmitCertificate(registro);
-      if (!data.ok) {
-        throw new Error(data.error || "No se pudo generar el certificado.");
-      }
+async function downloadRemoteCertificate(record) {
+  const result = await fetchRemoteCertificateAction("download_certificate", record, true);
+  if (!result.ok) throw new Error(result.error || "No se pudo generar el certificado.");
+  if (!result.pdfBase64) throw new Error("La respuesta no incluyó el PDF del certificado.");
+  return {
+    blob: base64ToBlob(result.pdfBase64, "application/pdf"),
+    filename: String(result.fileName || buildCertificateFilename(record)).trim(),
+  };
+}
 
-      if (!data.pdfBase64) {
-        throw new Error("La respuesta no incluyó el PDF del certificado.");
-      }
-
-      const blob = base64ToBlob(data.pdfBase64, "application/pdf");
-      const filename = String(data.fileName || buildCertificateFilename(registro)).trim();
-      triggerBlobDownload(blob, filename || buildCertificateFilename(registro));
-
-      if (data.emailSent) {
-        setStatus(`Certificado descargado y enviado para ${nombre}.`);
-      } else if (data.emailMessage) {
-        setStatus(`Certificado descargado para ${nombre}. Email: ${data.emailMessage}`, true);
-      } else {
-        setStatus(`Certificado descargado para ${nombre}.`);
-      }
-    } catch (error) {
-      setStatus(`No se pudo procesar el certificado de ${nombre}: ${error.message || error}`, true);
-    }
+async function downloadLocalCertificate(record) {
+  const response = await fetch(buildCertificateEndpoint("/api/certificados/download"), {
+    method: "POST",
+    mode: CERTIFICATE_API_BASE ? "cors" : "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ record, appSecret: APP_SECRET }),
+  });
+  const contentType = String(response.headers.get("Content-Type") || "").toLowerCase();
+  if (!response.ok || contentType.includes("application/json")) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "No se pudo generar el certificado.");
   }
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(
+      response.headers.get("Content-Disposition") || "",
+      buildCertificateFilename(record)
+    ),
+  };
+}
+
+async function sendLocalCertificate(record) {
+  const response = await fetch(buildCertificateEndpoint("/api/certificados/send"), {
+    method: "POST",
+    mode: CERTIFICATE_API_BASE ? "cors" : "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ record, appSecret: APP_SECRET }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo enviar el certificado.");
+  return data;
 }
 
 async function appendToGoogleSheets(records) {
@@ -323,6 +418,12 @@ async function appendToGoogleSheets(records) {
 function onResetFormulario() {
   window.setTimeout(() => {
     resetMaterias();
+    updateCountryProvinceField();
+    updateDisabilityField();
+    const email = dom.form?.elements.namedItem("email");
+    const amount = dom.form?.elements.namedItem("monto");
+    if (email instanceof HTMLInputElement) email.setCustomValidity("");
+    if (amount instanceof HTMLInputElement) amount.setCustomValidity("");
     setStatus("Formulario limpiado.");
   }, 0);
 }
@@ -1146,6 +1247,15 @@ function getSelectedHistorialRecord() {
   return registros.find((registro) => String(registro.id || "") === selectedId) || null;
 }
 
+function getHistorialCertificateRecord(record) {
+  if (Array.isArray(record.materias)) return record;
+  const sameEnrollment = registros.filter((candidate) =>
+    String(candidate.dni || "") === String(record.dni || "") &&
+    String(candidate.fecha_inscripcion || "") === String(record.fecha_inscripcion || "")
+  );
+  return buildCertificateRecord(sameEnrollment.length ? sameEnrollment : [record]);
+}
+
 async function onDescargarCertificadoSeleccionado() {
   const record = getSelectedHistorialRecord();
   if (!record) {
@@ -1167,61 +1277,35 @@ async function onEnviarCertificadoSeleccionado() {
 }
 
 async function descargarCertificadoSeleccionado(record = null) {
-  const registro = record || getSelectedHistorialRecord();
-  if (!registro) return;
-
-  const endpoint = buildCertificateEndpoint("/api/certificados/download");
+  const selected = record || getSelectedHistorialRecord();
+  if (!selected) return;
+  const registro = getHistorialCertificateRecord(selected);
 
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      mode: CERTIFICATE_API_BASE ? "cors" : "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ record: registro, appSecret: APP_SECRET }),
-    });
-
-    const contentType = String(response.headers.get("Content-Type") || "").toLowerCase();
-    if (!response.ok || contentType.includes("application/json")) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || "No se pudo generar el certificado.");
-    }
-
-    const blob = await response.blob();
-    const filename = filenameFromDisposition(
-      response.headers.get("Content-Disposition") || "",
-      buildCertificateFilename(registro)
-    );
-
-    triggerBlobDownload(blob, filename);
-    setStatus(`Certificado descargado: ${filename}`);
+    const downloaded = SHEETS_APPEND_URL
+      ? await downloadRemoteCertificate(registro)
+      : await downloadLocalCertificate(registro);
+    triggerBlobDownload(downloaded.blob, downloaded.filename);
+    setStatus(`Certificado descargado: ${downloaded.filename}`);
   } catch (error) {
     setStatus(`No se pudo descargar el certificado: ${error.message || error}`, true);
   }
 }
 
 async function enviarCertificadoSeleccionado(record = null) {
-  const registro = record || getSelectedHistorialRecord();
-  if (!registro) return;
-
-  const endpoint = buildCertificateEndpoint("/api/certificados/send");
+  const selected = record || getSelectedHistorialRecord();
+  if (!selected) return;
+  const registro = getHistorialCertificateRecord(selected);
 
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      mode: CERTIFICATE_API_BASE ? "cors" : "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ record: registro, appSecret: APP_SECRET }),
-    });
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || "No se pudo enviar el certificado.");
+    if (SHEETS_APPEND_URL) {
+      const result = await fetchRemoteCertificateAction("send_certificate", registro);
+      if (!result.ok || !result.emailSent) {
+        throw new Error(result.emailMessage || result.error || "No se pudo enviar el certificado.");
+      }
+    } else {
+      await sendLocalCertificate(registro);
     }
-
     setStatus(`Certificado enviado a ${registro.email}.`);
   } catch (error) {
     setStatus(`No se pudo enviar el certificado: ${error.message || error}`, true);
@@ -1513,26 +1597,38 @@ async function fetchRemoteCatalog(timeoutMs = 10000) {
   });
 }
 
-async function fetchRemoteEmitCertificate(record) {
-  const callbackName = `tapCertEmit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const url = new URL(SHEETS_APPEND_URL);
-  url.searchParams.set("action", "emit_certificate");
-  url.searchParams.set("record", encodeRecordForQuery(record));
-  if (APP_SECRET) {
-    url.searchParams.set("appSecret", APP_SECRET);
+async function fetchRemoteCertificateAction(action, record, retryDownload = false) {
+  const attempts = retryDownload && action === "download_certificate" ? 2 : 1;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchRemoteCertificateActionOnce(action, record);
+    } catch (error) {
+      lastError = error;
+    }
   }
+  throw lastError || new Error("No se pudo completar la solicitud del certificado.");
+}
+
+function fetchRemoteCertificateActionOnce(action, record) {
+  const callbackName = `imCert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const url = new URL(SHEETS_APPEND_URL);
+  url.searchParams.set("action", action);
+  url.searchParams.set("record", encodeRecordForQuery(record));
+  if (APP_SECRET) url.searchParams.set("appSecret", APP_SECRET);
   url.searchParams.set("callback", callbackName);
+  url.searchParams.set("_", `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
 
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
     const timeoutId = window.setTimeout(() => {
       cleanup();
-      reject(new Error("timeout"));
-    }, 15000);
+      reject(new Error("La solicitud del certificado agotó el tiempo de espera."));
+    }, 20000);
 
     function cleanup() {
       window.clearTimeout(timeoutId);
-      if (script.parentNode) script.parentNode.removeChild(script);
+      script.remove();
       try {
         delete window[callbackName];
       } catch {
@@ -1544,12 +1640,10 @@ async function fetchRemoteEmitCertificate(record) {
       cleanup();
       resolve(payload || {});
     };
-
     script.onerror = () => {
       cleanup();
-      reject(new Error("load-error"));
+      reject(new Error("No se pudo cargar la respuesta de Apps Script."));
     };
-
     script.src = url.toString();
     document.head.appendChild(script);
   });
